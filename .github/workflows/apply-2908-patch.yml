@@ -29,72 +29,91 @@ jobs:
           ref: fix/post-task-hnsw-indexing-2908
           fetch-depth: 0
 
-      - name: Apply exact HNSW dual-write correction
+      - name: Apply bounded HNSW dual-write correction
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
 
           target = Path('v3/@claude-flow/cli/src/memory/memory-initializer.ts')
-          source = target.read_text(encoding='utf-8')
+          lines = target.read_text(encoding='utf-8').splitlines(keepends=True)
 
-          replacements = [
-              (
-                  """  // ADR-053: Try AgentDB v3 bridge first
-          const bridge = await getBridge();
-          if (bridge) {
-            const bridgeResult = await bridge.bridgeAddToHNSW(id, embedding, entry);
-            if (bridgeResult === true) return true;
-          }
+          start_matches = [
+              i for i, line in enumerate(lines)
+              if line.strip() == '// ADR-053: Try AgentDB v3 bridge first'
+          ]
+          if len(start_matches) != 1:
+              raise SystemExit(f'expected one bridge block, found {len(start_matches)}')
 
-          const index = await getHNSWIndex({ dimensions: embedding.length });
-          if (!index) return false;
-          """,
-                  """  // ADR-053: Keep the AgentDB bridge and the persistent local HNSW
-          // index in sync. They are separate retrieval surfaces: a successful
-          // bridge insert must not suppress `.swarm/hnsw.index` metadata.
-          const bridge = await getBridge();
-          let bridgeIndexed = false;
-          if (bridge) {
-            bridgeIndexed = await bridge.bridgeAddToHNSW(id, embedding, entry) === true;
-          }
+          start = start_matches[0]
+          expected = [
+              '// ADR-053: Try AgentDB v3 bridge first',
+              'const bridge = await getBridge();',
+              'if (bridge) {',
+              'const bridgeResult = await bridge.bridgeAddToHNSW(id, embedding, entry);',
+              'if (bridgeResult === true) return true;',
+              '}',
+              '',
+              'const index = await getHNSWIndex({ dimensions: embedding.length });',
+              'if (!index) return false;',
+          ]
+          actual = [line.strip() for line in lines[start:start + len(expected)]]
+          if actual != expected:
+              raise SystemExit(f'unexpected bridge block shape: {actual!r}')
 
-          const index = await getHNSWIndex({ dimensions: embedding.length });
-          if (!index) return bridgeIndexed;
-          """,
-              ),
-              (
-                  """    return true;
-          } catch {
-            return false;
-          }
-          }
+          replacement = [
+              '  // ADR-053: Keep the AgentDB bridge and the persistent local HNSW\n',
+              '  // index in sync. They are separate retrieval surfaces: a successful\n',
+              '  // bridge insert must not suppress `.swarm/hnsw.index` metadata.\n',
+              '  const bridge = await getBridge();\n',
+              '  let bridgeIndexed = false;\n',
+              '  if (bridge) {\n',
+              '    bridgeIndexed = await bridge.bridgeAddToHNSW(id, embedding, entry) === true;\n',
+              '  }\n',
+              '\n',
+              '  const index = await getHNSWIndex({ dimensions: embedding.length });\n',
+              '  if (!index) return bridgeIndexed;\n',
+          ]
+          lines[start:start + len(expected)] = replacement
 
-          /**
-           * Search HNSW index""",
-                  """    return true;
-          } catch {
-            return bridgeIndexed;
-          }
-          }
+          function_start = next(
+              i for i, line in enumerate(lines)
+              if line.startswith('export async function addToHNSWIndex(')
+          )
+          function_end = next(
+              i for i in range(function_start + 1, len(lines))
+              if lines[i].startswith('export async function searchHNSWIndex(')
+          )
 
-          /**
-           * Search HNSW index""",
-              ),
+          catch_matches = []
+          for i in range(function_start, function_end - 2):
+              if (
+                  lines[i].strip() == '} catch {'
+                  and lines[i + 1].strip() == 'return false;'
+                  and lines[i + 2].strip() == '}'
+              ):
+                  catch_matches.append(i)
+          if len(catch_matches) != 1:
+              raise SystemExit(f'expected one addToHNSW catch block, found {len(catch_matches)}')
+
+          catch_start = catch_matches[0]
+          lines[catch_start:catch_start + 3] = [
+              '  } catch {\n',
+              '    return bridgeIndexed;\n',
+              '  }\n',
           ]
 
-          for old, new in replacements:
-              count = source.count(old)
-              if count != 1:
-                  raise SystemExit(f'expected exactly one replacement target, found {count}')
-              source = source.replace(old, new, 1)
-
-          if 'if (bridgeResult === true) return true;' in source:
-              raise SystemExit('early bridge return still present')
-          if 'if (!index) return bridgeIndexed;' not in source:
-              raise SystemExit('local-index fallback was not installed')
-          if 'return bridgeIndexed;' not in source:
-              raise SystemExit('bridge fallback result is missing')
+          source = ''.join(lines)
+          bounded = source[source.index('export async function addToHNSWIndex('):source.index('export async function searchHNSWIndex(')]
+          checks = {
+              'early bridge return': 'if (bridgeResult === true) return true;' not in bounded,
+              'bridge state': 'let bridgeIndexed = false;' in bounded,
+              'local fallback': 'if (!index) return bridgeIndexed;' in bounded,
+              'catch fallback': 'return bridgeIndexed;' in bounded,
+          }
+          failed = [name for name, ok in checks.items() if not ok]
+          if failed:
+              raise SystemExit(f'patch verification failed: {failed}')
 
           target.write_text(source, encoding='utf-8')
           PY
