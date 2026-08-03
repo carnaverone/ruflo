@@ -1,0 +1,97 @@
+# Temporary branch-only patch applicator. It removes itself after success.
+name: Apply agentic-qe memory provenance
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.head_ref == 'fix/agentic-qe-memory-provenance'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/agentic-qe-memory-provenance
+          fetch-depth: 1
+
+      - name: Add canonical provenance to QE writes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          target = Path('v3/plugins/agentic-qe/src/bridges/QEMemoryBridge.ts')
+          source = target.read_text(encoding='utf-8')
+
+          interface_anchor = """interface StoreEntry {
+            namespace: string;
+          """
+          interface_replacement = """type MemoryProvenanceType =
+            | 'user_claim'
+            | 'agent_output'
+            | 'system_observation'
+            | 'tool_result'
+            | 'unknown';
+
+          interface StoreEntry {
+            namespace: string;
+          """
+          if source.count(interface_anchor) != 1:
+              raise SystemExit('StoreEntry interface anchor is missing or ambiguous')
+          source = source.replace(interface_anchor, interface_replacement, 1)
+
+          field_anchor = """  content: string;
+            embedding?: Float32Array;
+          """
+          field_replacement = """  content: string;
+            provenance_type: MemoryProvenanceType;
+            embedding?: Float32Array;
+          """
+          if source.count(field_anchor) != 1:
+              raise SystemExit('StoreEntry content field anchor is missing or ambiguous')
+          source = source.replace(field_anchor, field_replacement, 1)
+
+          replacements = [
+              ("        type: 'semantic',\n", "        provenance_type: 'agent_output',\n        type: 'semantic',\n"),
+              ("        type: 'episodic',\n", "        provenance_type: 'tool_result',\n        type: 'episodic',\n"),
+              ("        type: 'procedural',\n", "        provenance_type: 'system_observation',\n        type: 'procedural',\n"),
+          ]
+          for old, new in replacements:
+              count = source.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected one provenance insertion target, found {count}: {old.strip()}')
+              source = source.replace(old, new, 1)
+
+          if source.count('provenance_type:') != 4:
+              raise SystemExit('unexpected provenance field count after patch')
+
+          target.write_text(source, encoding='utf-8')
+          PY
+
+      - name: Verify focused diff
+        shell: bash
+        run: |
+          git diff --check
+          git diff -- v3/plugins/agentic-qe/src/bridges/QEMemoryBridge.ts
+          grep -F "provenance_type: 'agent_output'" v3/plugins/agentic-qe/src/bridges/QEMemoryBridge.ts
+          grep -F "provenance_type: 'tool_result'" v3/plugins/agentic-qe/src/bridges/QEMemoryBridge.ts
+          grep -F "provenance_type: 'system_observation'" v3/plugins/agentic-qe/src/bridges/QEMemoryBridge.ts
+
+      - name: Commit correction and remove temporary workflow
+        shell: bash
+        run: |
+          rm .github/workflows/apply-agentic-qe-provenance.yml
+          git config user.name "carnaverone-ruflo-bot"
+          git config user.email "77895611+carnaverone@users.noreply.github.com"
+          git add v3/plugins/agentic-qe/src/bridges/QEMemoryBridge.ts .github/workflows/apply-agentic-qe-provenance.yml
+          git commit -m "fix(agentic-qe): classify official memory writes"
+          git push origin HEAD:fix/agentic-qe-memory-provenance
