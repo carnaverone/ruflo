@@ -1,0 +1,109 @@
+name: Apply issue 2908 patch
+
+on:
+  push:
+    branches:
+      - fix/post-task-hnsw-indexing-2908
+    paths:
+      - .github/workflows/apply-2908-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out correction branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/post-task-hnsw-indexing-2908
+          fetch-depth: 0
+
+      - name: Apply exact HNSW dual-write correction
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          target = Path('v3/@claude-flow/cli/src/memory/memory-initializer.ts')
+          source = target.read_text(encoding='utf-8')
+
+          replacements = [
+              (
+                  """  // ADR-053: Try AgentDB v3 bridge first
+          const bridge = await getBridge();
+          if (bridge) {
+            const bridgeResult = await bridge.bridgeAddToHNSW(id, embedding, entry);
+            if (bridgeResult === true) return true;
+          }
+
+          const index = await getHNSWIndex({ dimensions: embedding.length });
+          if (!index) return false;
+          """,
+                  """  // ADR-053: Keep the AgentDB bridge and the persistent local HNSW
+          // index in sync. They are separate retrieval surfaces: a successful
+          // bridge insert must not suppress `.swarm/hnsw.index` metadata.
+          const bridge = await getBridge();
+          let bridgeIndexed = false;
+          if (bridge) {
+            bridgeIndexed = await bridge.bridgeAddToHNSW(id, embedding, entry) === true;
+          }
+
+          const index = await getHNSWIndex({ dimensions: embedding.length });
+          if (!index) return bridgeIndexed;
+          """,
+              ),
+              (
+                  """    return true;
+          } catch {
+            return false;
+          }
+          }
+
+          /**
+           * Search HNSW index""",
+                  """    return true;
+          } catch {
+            return bridgeIndexed;
+          }
+          }
+
+          /**
+           * Search HNSW index""",
+              ),
+          ]
+
+          for old, new in replacements:
+              count = source.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected exactly one replacement target, found {count}')
+              source = source.replace(old, new, 1)
+
+          if 'if (bridgeResult === true) return true;' in source:
+              raise SystemExit('early bridge return still present')
+          if 'if (!index) return bridgeIndexed;' not in source:
+              raise SystemExit('local-index fallback was not installed')
+          if 'return bridgeIndexed;' not in source:
+              raise SystemExit('bridge fallback result is missing')
+
+          target.write_text(source, encoding='utf-8')
+          PY
+
+      - name: Verify focused diff
+        shell: bash
+        run: |
+          git diff --check
+          git diff -- v3/@claude-flow/cli/src/memory/memory-initializer.ts
+          grep -F "let bridgeIndexed = false;" v3/@claude-flow/cli/src/memory/memory-initializer.ts
+          grep -F "if (!index) return bridgeIndexed;" v3/@claude-flow/cli/src/memory/memory-initializer.ts
+
+      - name: Commit correction and remove temporary workflow
+        shell: bash
+        run: |
+          rm .github/workflows/apply-2908-patch.yml
+          git config user.name "carnaverone-ruflo-bot"
+          git config user.email "77895611+carnaverone@users.noreply.github.com"
+          git add v3/@claude-flow/cli/src/memory/memory-initializer.ts .github/workflows/apply-2908-patch.yml
+          git commit -m "fix(memory): keep persistent HNSW in sync with bridge"
+          git push origin HEAD:fix/post-task-hnsw-indexing-2908
