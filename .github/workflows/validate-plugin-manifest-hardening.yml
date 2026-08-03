@@ -1,0 +1,34 @@
+name: Validate plugin manifest hardening
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+permissions:
+  contents: read
+
+jobs:
+  targeted-test:
+    if: github.head_ref == 'fix/plugin-manifest-untrusted-input-hardening'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/plugin-manifest-untrusted-input-hardening
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Test bounded JSON parser
+        run: node --test scripts/__tests__/parse-untrusted-json.test.mjs
+
+      - name: Audit all plugin manifests
+        run: node scripts/audit-plugin-manifest.mjs --format json
