@@ -12,33 +12,11 @@ import path from 'node:path';
 
 const state = vi.hoisted(() => ({
   bridgeAddToHNSW: vi.fn(async () => true),
-  localInserts: [] as Array<{ id: string; vector: Float32Array }>,
 }));
 
 vi.mock('../src/memory/memory-bridge.js', () => ({
   bridgeAddToHNSW: state.bridgeAddToHNSW,
 }));
-
-vi.mock('@ruvector/core', () => {
-  class VectorDb {
-    async len(): Promise<number> {
-      return 0;
-    }
-
-    async insert(input: { id: string; vector: Float32Array }): Promise<void> {
-      state.localInserts.push(input);
-    }
-
-    async search(): Promise<never[]> {
-      return [];
-    }
-  }
-
-  return {
-    VectorDb,
-    default: { VectorDb },
-  };
-});
 
 let root: string;
 const originalRoot = process.env.CLAUDE_FLOW_MEMORY_PATH;
@@ -49,7 +27,6 @@ beforeEach(() => {
   process.env.CLAUDE_FLOW_MEMORY_PATH = root;
   delete process.env.CLAUDE_FLOW_DISABLE_BRIDGE;
   state.bridgeAddToHNSW.mockClear();
-  state.localInserts.length = 0;
   vi.resetModules();
 });
 
@@ -86,8 +63,12 @@ describe('persistent HNSW dual-write (#2908)', () => {
       }),
     );
 
-    expect(state.localInserts).toHaveLength(1);
-    expect(state.localInserts[0]?.id).toBe(id);
+    expect(memory.getHNSWStatus()).toMatchObject({
+      available: true,
+      initialized: true,
+      entryCount: 1,
+      dimensions: embedding.length,
+    });
 
     const metadataPath = path.join(root, 'hnsw.metadata.json');
     expect(existsSync(metadataPath)).toBe(true);
