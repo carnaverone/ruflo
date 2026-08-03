@@ -1,3 +1,4 @@
+# Temporary branch-only patch applicator. It removes itself after success.
 name: Apply issue 2908 patch
 
 on:
