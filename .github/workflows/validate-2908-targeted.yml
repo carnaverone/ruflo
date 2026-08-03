@@ -1,0 +1,50 @@
+name: Validate issue 2908 targeted
+
+on:
+  push:
+    branches:
+      - fix/post-task-hnsw-indexing-2908
+    paths:
+      - .github/workflows/validate-2908-targeted.yml
+  pull_request:
+    branches:
+      - main
+    types:
+      - synchronize
+      - reopened
+
+permissions:
+  contents: read
+
+jobs:
+  targeted-test:
+    if: github.head_ref == 'fix/post-task-hnsw-indexing-2908' || github.ref_name == 'fix/post-task-hnsw-indexing-2908'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/post-task-hnsw-indexing-2908
+          fetch-depth: 1
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 8.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: v3/pnpm-lock.yaml
+
+      - name: Install v3 dependencies
+        working-directory: v3
+        run: pnpm install --frozen-lockfile
+
+      - name: Run issue 2908 regression
+        working-directory: v3/@claude-flow/cli
+        run: pnpm exec vitest run __tests__/memory-hnsw-bridge-dual-write-2908.test.ts
+
+      - name: Type-check changed source
+        working-directory: v3/@claude-flow/cli
+        run: pnpm exec tsc --noEmit
