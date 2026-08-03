@@ -28,6 +28,12 @@ jobs:
           cache: npm
           cache-dependency-path: v3/plugins/agentic-qe/package.json
 
+      - name: Test plugin provenance audit
+        run: node --test scripts/__tests__/audit-plugin-memory-provenance.test.mjs
+
+      - name: Audit all plugin memory writes
+        run: node scripts/audit-plugin-memory-provenance.mjs --format=json
+
       - name: Install plugin dependencies
         working-directory: v3/plugins/agentic-qe
         run: npm install --no-package-lock --ignore-scripts
