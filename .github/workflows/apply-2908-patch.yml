@@ -6,12 +6,20 @@ on:
       - fix/post-task-hnsw-indexing-2908
     paths:
       - .github/workflows/apply-2908-patch.yml
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
 
 permissions:
   contents: write
 
 jobs:
   patch:
+    if: github.head_ref == 'fix/post-task-hnsw-indexing-2908' || github.ref_name == 'fix/post-task-hnsw-indexing-2908'
     runs-on: ubuntu-latest
     steps:
       - name: Check out correction branch
