@@ -1,0 +1,39 @@
+name: Execution attestation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/lib/execution-attestation.mjs'
+      - 'scripts/run-and-attest.mjs'
+      - 'scripts/verify-execution-attestation.mjs'
+      - 'scripts/__tests__/execution-attestation.test.mjs'
+      - 'docs/design/execution-attestation-contract.md'
+      - '.github/workflows/execution-attestation.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'scripts/lib/execution-attestation.mjs'
+      - 'scripts/run-and-attest.mjs'
+      - 'scripts/verify-execution-attestation.mjs'
+      - 'scripts/__tests__/execution-attestation.test.mjs'
+      - 'docs/design/execution-attestation-contract.md'
+      - '.github/workflows/execution-attestation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  execution-attestation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Run signed execution-attestation tests
+        run: node --test scripts/__tests__/execution-attestation.test.mjs
